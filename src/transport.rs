@@ -17,6 +17,7 @@ use hyperlocal::Uri as DomainUri;
 use mime::Mime;
 use serde_json;
 use std::fmt;
+use std::collections::HashMap;
 
 pub fn tar() -> Mime {
     "application/tar".parse().unwrap()
@@ -65,12 +66,13 @@ impl Transport {
         method: Method,
         endpoint: &str,
         body: Option<(B, Mime)>,
+        custom_headers: Option<HashMap<&str, &str>>,
     ) -> impl Future<Item = String, Error = Error>
     where
         B: Into<Body>,
     {
         let endpoint = endpoint.to_string();
-        self.stream_chunks(method, &endpoint, body)
+        self.stream_chunks(method, &endpoint, body, custom_headers)
             .concat2()
             .and_then(|v| {
                 String::from_utf8(v.to_vec())
@@ -86,12 +88,13 @@ impl Transport {
         method: Method,
         endpoint: &str,
         body: Option<(B, Mime)>,
+        custom_headers: Option<HashMap<&str, &str>>,
     ) -> impl Stream<Item = Chunk, Error = Error>
     where
         B: Into<Body>,
     {
         let req = self
-            .build_request(method, endpoint, body)
+            .build_request(method, endpoint, body, custom_headers)
             .expect("Failed to build request!");
 
         self.send_request(req)
@@ -139,6 +142,7 @@ impl Transport {
         method: Method,
         endpoint: &str,
         body: Option<(B, Mime)>,
+        mut custom_headers: Option<HashMap<&str, &str>>
     ) -> Result<Request<Body>>
     where
         B: Into<Body>,
@@ -157,7 +161,15 @@ impl Transport {
                 builder.method(method).uri(&uri.to_string())
             }
         };
-        let req = req.header(header::HOST, "");
+
+        let req = if let Some(headers) = custom_headers.take() {
+            headers.into_iter()
+                .fold(req.header(header::HOST, ""), |acc, (key, value)| {
+                    acc.header(key, value)
+                })
+        } else {
+            req.header(header::HOST, "")
+        };
 
         match body {
             Some((b, c)) => Ok(req

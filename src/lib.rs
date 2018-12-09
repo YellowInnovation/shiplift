@@ -132,6 +132,25 @@ impl<'a, 'b> Image<'a, 'b> {
             .delete_json::<Vec<Status>>(&format!("/images/{}", self.name)[..])
     }
 
+    pub fn tag(&self, tag: &str, mut repo: Option<&str>) -> impl Future<Item = Status, Error = Error> {
+        let mut query = form_urlencoded::Serializer::new(String::new());
+        query.append_pair("tag", tag);
+        if let Some(repo) = repo.take() {
+            query.append_pair("repo", repo);
+        }
+
+        self.docker.post::<String>(&format!("/images/{}/tag{}", self.name, query.finish()), None).map(|s| Status::Tagged(s))
+    }
+
+    pub fn push(&self, auth: &str, mut tag: Option<&str>) -> impl Future<Item = String, Error = Error> {
+        let mut query = form_urlencoded::Serializer::new(String::new());
+        if let Some(tag) = tag.take() {
+            query.append_pair("tag", tag);
+        }
+
+        self.docker.post_authenticated::<String>(&format!("/images/{}/push{}", self.name, query.finish()), auth, None)
+    }
+
     /// Export this image to a tarball
     pub fn export(&self) -> impl Stream<Item = Vec<u8>, Error = Error> {
         self.docker
@@ -709,7 +728,7 @@ impl Docker {
             "{}://{}:{}",
             host.scheme_part().map(|s| s.as_str()).unwrap(),
             host.host().unwrap().to_owned(),
-            host.port().unwrap_or(80)
+            host.port_part().map(|port| port.as_u16()).unwrap_or(80)
         );
 
         match host.scheme_part().map(|s| s.as_str()) {
@@ -819,15 +838,14 @@ impl Docker {
         &self,
         endpoint: &str,
     ) -> impl Future<Item = String, Error = Error> {
-        self.transport.request::<Body>(Method::GET, endpoint, None)
+        self.transport.request::<Body>(Method::GET, endpoint, None, None)
     }
 
     fn get_json<T: serde::de::DeserializeOwned>(
         &self,
         endpoint: &str,
     ) -> impl Future<Item = T, Error = Error> {
-        self.transport
-            .request::<Body>(Method::GET, endpoint, None)
+        self.get(endpoint)
             .and_then(|v| {
                 serde_json::from_str::<T>(&v)
                     .map_err(Error::SerdeJsonError)
@@ -838,12 +856,12 @@ impl Docker {
     fn post<B>(
         &self,
         endpoint: &str,
-        body: Option<(B, Mime)>,
+        body: Option<(B, Mime)>
     ) -> impl Future<Item = String, Error = Error>
     where
         B: Into<Body>,
     {
-        self.transport.request(Method::POST, endpoint, body)
+        self.transport.request(Method::POST, endpoint, body, None)
     }
 
     fn post_json<B, T>(
@@ -855,8 +873,7 @@ impl Docker {
         B: Into<Body>,
         T: serde::de::DeserializeOwned,
     {
-        self.transport
-            .request(Method::POST, endpoint, body)
+        self.post(endpoint, body)
             .and_then(|v| {
                 serde_json::from_str::<T>(&v)
                     .map_err(Error::SerdeJsonError)
@@ -864,12 +881,26 @@ impl Docker {
             })
     }
 
+    fn post_authenticated<B>(
+        &self,
+        endpoint: &str,
+        auth: &str,
+        body: Option<(B, Mime)>
+    ) -> impl Future<Item = String, Error = Error>
+    where
+        B: Into<Body>
+    {
+        let mut headers = ::std::collections::HashMap::default();
+        headers.insert("X-Registry-Auth", auth);
+        self.transport.request(Method::POST, endpoint, body, Some(headers))
+    }
+
     fn delete(
         &self,
         endpoint: &str,
     ) -> impl Future<Item = String, Error = Error> {
         self.transport
-            .request::<Body>(Method::DELETE, endpoint, None)
+            .request::<Body>(Method::DELETE, endpoint, None, None)
     }
 
     fn delete_json<T: serde::de::DeserializeOwned>(
@@ -877,7 +908,7 @@ impl Docker {
         endpoint: &str,
     ) -> impl Future<Item = T, Error = Error> {
         self.transport
-            .request::<Body>(Method::DELETE, endpoint, None)
+            .request::<Body>(Method::DELETE, endpoint, None, None)
             .and_then(|v| {
                 serde_json::from_str::<T>(&v)
                     .map_err(Error::SerdeJsonError)
@@ -893,7 +924,7 @@ impl Docker {
     where
         B: Into<Body>,
     {
-        self.transport.stream_chunks(Method::POST, endpoint, body)
+        self.transport.stream_chunks(Method::POST, endpoint, body, None)
     }
 
     fn stream_get(
@@ -901,6 +932,6 @@ impl Docker {
         endpoint: &str,
     ) -> impl Stream<Item = hyper::Chunk, Error = Error> {
         self.transport
-            .stream_chunks::<Body>(Method::GET, endpoint, None)
+            .stream_chunks::<Body>(Method::GET, endpoint, None, None)
     }
 }

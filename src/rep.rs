@@ -454,5 +454,6 @@ pub struct Actor {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Status {
     Untagged(String),
+    Tagged(String),
     Deleted(String),
 }
